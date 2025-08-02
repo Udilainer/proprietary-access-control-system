@@ -146,6 +146,6 @@ JWT_SECRET_KEY = os.environ.get("JWT_SECRET_KEY", SECRET_KEY)
 JWT_LIFETIME_SECONDS = int(os.environ.get("JWT_LIFETIME_SECONDS", 900))
 
 AUTHENTICATION_BACKENDS = [
-    'django.contrib.auth.backends.ModelBackend'
+    'django.contrib.auth.backends.ModelBackend',
     'auth_system.backends.EmailBackend',
 ]
