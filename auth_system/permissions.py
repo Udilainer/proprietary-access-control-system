@@ -67,8 +67,6 @@ class HasPermission(BasePermission):
         Проверяет глобальные разрешения для представления
         (например, возможность просматривать список или создавать).
         """
-        print(f">>> DEBUG: User type: {type(request.user)}")
-        print(">>> DEBUG: HasPermission is running!")
         user = request.user
 
         if getattr(user, "is_superuser", False):
