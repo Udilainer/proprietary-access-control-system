@@ -4,6 +4,7 @@ from django.contrib.auth import authenticate
 from rest_framework import serializers
 
 from .models import User, CustomUserManager
+from .models import Role, BusinessObject, Permission
 
 
 class UserRegistrationSerializer(serializers.ModelSerializer):
@@ -39,9 +40,7 @@ class LoginSerializer(serializers.Serializer):
         email = attrs.get("email")
         password = attrs.get("password")
         user = authenticate(
-            request=self.context.get("request"),
-            username=email,
-            password=password
+            request=self.context.get("request"), username=email, password=password
         )
 
         if not user:
@@ -56,3 +55,44 @@ class LoginSerializer(serializers.Serializer):
 
         attrs["user"] = user
         return attrs
+
+
+class RoleSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Role
+        fields = ["id", "name"]
+
+
+class BusinessObjectSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = BusinessObject
+        fields = ["id", "code", "name"]
+
+
+class PermissionSerializer(serializers.ModelSerializer):
+    role = serializers.SlugRelatedField(slug_field="name", queryset=Role.objects.all())
+    business_object = serializers.SlugRelatedField(
+        slug_field="code", queryset=BusinessObject.objects.all()
+    )
+
+    class Meta:
+        model = Permission
+        fields = [
+            "id",
+            "role",
+            "business_object",
+            "can_create",
+            "can_read_own",
+            "can_read_all",
+            "can_update_own",
+            "can_update_all",
+            "can_delete_own",
+            "can_delete_all",
+        ]
+
+
+class UserProfileSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = User
+        fields = ["id", "email", "first_name", "last_name"]
+        read_only_fields = ["id", "email"]

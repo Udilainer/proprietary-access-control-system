@@ -139,6 +139,7 @@ REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': [
         'auth_system.authentication.JWTAuthentication',
     ],
+    'EXCEPTION_HANDLER': 'auth_system.exception_handler.exception_handler',
     'UNAUTHENTICATED_USER': None,
 }
 

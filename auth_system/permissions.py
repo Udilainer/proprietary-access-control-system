@@ -1,71 +1,74 @@
 from django.core.exceptions import ObjectDoesNotExist
+from rest_framework import exceptions
 from rest_framework.permissions import BasePermission
 
-from .models import Permission, BusinessObject
+from .models import BusinessObject, Permission
+
+
+class IsAuthenticatedOr401(BasePermission):
+    """
+    Разрешает доступ только аутентифицированным пользователям.
+    Если пользователь не аутентифицирован, это вызывает исключение AuthenticationFailed,
+    которое DRF преобразует в ответ с кодом 401 Unauthorized.
+    """
+
+    def has_permission(self, request, view):
+        if request.user and request.user.is_authenticated:
+            return True
+        raise exceptions.NotAuthenticated(
+            "Authentication credentials were not provided. "
+            "Please include a valid Authorization header."
+        )
 
 
 class HasPermission(BasePermission):
     """
-    Универсальная проверка разрешений на основе ролей (RBAC).
+    Динамический класс разрешений на основе ролей, который проверяет права
+    пользователя в отношении бизнес-объекта и конкретного выполняемого действия
+    (например, просмотр списка, создание).
 
-    Эта система позволяет декларативно определять необходимые разрешения
-    для каждого представления, абстрагируя логику проверки прав доступа
-    пользователя к определенным бизнес-объектам и действиям.
+    Для использования добавьте следующее в ваш ViewSet или APIView:
+        permission_classes = [HasPermission]
+        business_object_code = "your_object_code"
 
-    Пример использования внутри представления:
-
-        permission_classes = [HasPermission("products", "read_all")]
-
-    Экземпляр класса инициализируется с использованием 'business_code'
-    и 'action', что позволяет каждому представлению четко объявлять
-    свои требования к доступу.
+    Для APIView, не являющихся ViewSet'ами, вы также должны указать действие:
+        required_action = "read_all"
     """
 
-    def __init__(self, business_code: str, action: str):
+    ACTION_MAP = {
+        "list": "read_all",
+        "create": "create",
+        "retrieve": "read_own",
+        "update": "update_own",
+        "partial_update": "update_own",
+        "destroy": "delete_own",
+    }
+
+    ALL_ACTION_MAP = {
+        "read_own": "read_all",
+        "update_own": "update_all",
+        "delete_own": "delete_all",
+    }
+
+    def _get_perm_record(self, user, view):
         """
-        Инициализирует экземпляр класса HasPermission.
-
-        Параметры:
-            business_code (str): Уникальный код бизнес-объекта
-                                 (например, "products", "orders").
-            action (str): Действие, которое необходимо проверить
-                          (например, "read_all", "create", "delete_own").
-        """
-        self.business_code = business_code
-        self.action = action
-
-    def _get_perm_record(self, user) -> Permission | None:
-        """
-        Получает запись разрешения для указанного пользователя и
-        текущего бизнес-объекта.
-
-        Параметры:
-            user: Объект пользователя, для которого запрашивается разрешение.
-
-        Возвращает:
-            Permission | None: Объект разрешения, если найден, иначе None.
+        Получает запись о разрешении для пользователя
+        на основе конфигурации представления.
         """
         try:
-            bo = BusinessObject.objects.get(code=self.business_code)
+            business_code = getattr(view, "business_object_code")
+            bo = BusinessObject.objects.get(code=business_code)
             return Permission.objects.get(role=user.role, business_object=bo)
-        except ObjectDoesNotExist:
+        except (ObjectDoesNotExist, AttributeError):
             return None
 
     def has_permission(self, request, view) -> bool:  # type: ignore[override]
         """
-        Проверяет, имеет ли пользователь общие разрешения для доступа
-        к представлению (например, 'read_all', 'create').
-
-        Эта проверка выполняется для всех типов маршрутов (список и детали).
-        Если пользователь является суперпользователем, доступ всегда разрешен.
-
-        Параметры:
-            request: Объект запроса Django.
-            view: Объект представления Django REST Framework.
-
-        Возвращает:
-            bool: True, если пользователь имеет необходимое разрешение, иначе False.
+        Проверяет глобальные разрешения для представления
+        (например, возможность просматривать список или создавать).
         """
+        print(f">>> DEBUG: User type: {type(request.user)}")
+        print(">>> DEBUG: HasPermission is running!")
         user = request.user
 
         if getattr(user, "is_superuser", False):
@@ -74,39 +77,56 @@ class HasPermission(BasePermission):
         if not user or not user.is_authenticated:
             return False
 
-        perm = self._get_perm_record(user)
-        if not perm:
+        perm_record = self._get_perm_record(user, view)
+        if not perm_record:
             return False
 
-        return getattr(perm, f"can_{self.action}", False)
+        if hasattr(view, "required_action"):
+            action = view.required_action
+        else:
+            action = self.ACTION_MAP.get(view.action)
+
+        if not action:
+            return False
+
+        if action in ["create", "read_all"]:
+            return getattr(perm_record, f"can_{action}", False)
+
+        has_own_perm = getattr(perm_record, f"can_{action}", False)
+        all_action = self.ALL_ACTION_MAP.get(action)
+        has_all_perm = (
+            getattr(perm_record, f"can_{all_action}", False) if all_action else False
+        )
+
+        return has_own_perm or has_all_perm
 
     def has_object_permission(  # type: ignore[override]
         self, request, view, obj
     ) -> bool:
         """
-        Проверяет разрешения пользователя на доступ к конкретному экземпляру объекта.
-
-        Эта проверка вызывается только для детальных маршрутов.
-
-        Если действие предполагает доступ ко всем объектам (например, 'read_all'),
-        тогда проверка has_permission() уже определила общий уровень доступа.
-        Для действий типа *_own (например, 'update_own', 'delete_own')
-        дополнительно проверяется, является ли пользователь владельцем объекта.
-
-        Параметры:
-            request: Объект запроса Django.
-            view: Объект представления Django REST Framework.
-            obj: Экземпляр объекта, к которому запрашивается доступ.
-
-        Возвращает:
-            bool: True, если пользователь имеет необходимое разрешение для
-                  доступа к объекту, иначе False.
+        Проверяет, имеет ли пользователь разрешение на
+        выполнение действия над конкретным объектом.
         """
-        if self.has_permission(request, view):
+        user = request.user
+
+        if getattr(user, "is_superuser", False):
             return True
 
-        if not self.action.endswith("_own"):
+        perm_record = self._get_perm_record(user, view)
+        if not perm_record:
             return False
 
-        owner_id = getattr(obj, "owner_id", None)
-        return owner_id == request.user.id
+        action = self.ACTION_MAP.get(view.action)
+        if not action:
+            return False
+
+        all_action = self.ALL_ACTION_MAP.get(action)
+        if all_action and getattr(perm_record, f"can_{all_action}", False):
+            return True
+
+        if getattr(perm_record, f"can_{action}", False):
+            if hasattr(obj, "owner_id"):
+                return obj.owner_id == user.id
+            return False
+
+        return False
