@@ -1,4 +1,3 @@
-from datetime import datetime, timezone
 from typing import cast, Any
 
 from rest_framework.request import Request
@@ -12,7 +11,6 @@ from rest_framework.viewsets import ModelViewSet
 
 from . import utils
 from .models import (
-    BlacklistedToken,
     BusinessObject,
     Permission,
     Role,
@@ -80,24 +78,7 @@ class LogoutView(APIView):
     permission_classes = [IsAuthenticatedOr401]
 
     def post(self, request: HttpRequest) -> Response:
-        auth_header = request.headers.get("Authorization")
-        if not auth_header or not auth_header.startswith("Bearer "):
-            raise exceptions.AuthenticationFailed(
-                "Authorization header is missing or invalid."
-            )
-
-        token = auth_header.split(" ")[1]
-        payload = utils.decode_jwt(token)
-        if not payload:
-            raise exceptions.AuthenticationFailed("Invalid token.")
-
-        jti = payload["jti"]
-        expires_at = datetime.fromtimestamp(payload["exp"], tz=timezone.utc)
-
-        BlacklistedToken.objects.create(
-            user=cast(User, request.user), jti=jti, expires_at=expires_at
-        )
-
+        utils.blacklist_token(request)
         return Response(
             {"message": "Successfully logged out."}, status=status.HTTP_200_OK
         )
@@ -133,16 +114,7 @@ class DeleteAccountView(APIView):
         user.is_active = False
         user.save(update_fields=["is_active"])
 
-        auth_header = request.headers.get("Authorization")
-        if auth_header and auth_header.startswith("Bearer "):
-            token = auth_header.split(" ")[1]
-            payload = utils.decode_jwt(token)
-            if payload:
-                expires_at = datetime.fromtimestamp(payload["exp"], tz=timezone.utc)
-                BlacklistedToken.objects.get_or_create(
-                    user=user, jti=payload["jti"], defaults={"expires_at": expires_at}
-                )
-
+        utils.blacklist_token(request)
         return Response(
             {"message": "Account successfully marked for deletion."},
             status=status.HTTP_200_OK,
